@@ -1,99 +1,57 @@
 /*jslint browser: true*/
-/*global Tangram, gui */
+/*global Tangram, L, dat, saveAs */
 
 map = (function () {
   'use strict';
   
   var map_start_location = [0, 0, 2];
-  var global_min = 0;
-  var global_max = 8900;
-  var uminValue, umaxValue; // storage
+  var uminValue, umaxValue; 
   var scene_loaded = false;
-  var moving = false;
   var analysing = false;
   var done = false;
   var tempCanvas;
   var spread = 1;
   var lastumax = null;
   var diff = null;
-  var stopped = false; // emergency brake
+  var stopped = false; 
+  var moving = false; 
   var widening = false;
-  var tempFactor = 8; // size of tempCanvas relative to main canvas: 1/n
+  var tempFactor = 8; 
   
-  // Renderer:
-  // byte to mb factor:
   const mb_factor = 1.0 / (1024 * 1024);
-  var zoomRender = 2;
   const min_zoomRender = 1;
-  const max_zoomRender = 8; // if you need more, fork this repo and use your own api key!
+  const max_zoomRender = 8; 
   
-  var renderName = {name: 'render'};
-  
-  /*** URL parsing ***/
-  
-  // leaflet-style URL hash pattern:
-  // #[zoom],[lat],[lng]
   var url_hash = window.location.hash.slice(1, window.location.hash.length).split('/');
-  
   if (url_hash.length == 3) {
     map_start_location = [url_hash[1],url_hash[2], url_hash[0]];
-    // convert from strings
     map_start_location = map_start_location.map(Number);
   }
   
-  var query = splitQueryParams();
-  // { language: 'en', this: 'no'}
+  var map = L.map('map', {
+    "keyboardZoomOffset" : .05,
+    "inertiaDeceleration" : 10000,
+    "zoomSnap" : .001
+  });
   
-  function splitQueryParams () {
-    var str = window.location.search;
-    
-    var kvArray = str.slice(1).split('&');
-    // ['language=en', 'this=no']
-    
-    var obj = {};
-    
-    for (var i = 0, j=kvArray.length; i<j; i++) {
-      var value = kvArray[i].split('=');
-      var k = window.decodeURIComponent(value[0]);
-      var v = window.decodeURIComponent(value[1]);
-      
-      obj[k] = v;
-    }
-    
-    return obj;
-  }
-  
-  /*** Map ***/
-  
-  var map = L.map('map',
-  {"keyboardZoomOffset" : .05,
-  "inertiaDeceleration" : 10000,
-  "zoomSnap" : .001}
-  );
-  
-  var layer = Tangram.leafletLayer({
-    scene: 'scene.yaml',
-    attribution: 'Map by <a href="https://mapzen.com/tangram" target="_blank">Tangram</a> | <a href="https://github.com/tangrams/heightmapper" target="_blank">Fork This</a>',
+  // ENGINE 1: TERRAIN ONLY
+  var terrainLayer = Tangram.leafletLayer({
+    scene: 'scene-terrain.yaml',
+    attribution: 'Stadia Maps | Tangram',
     postUpdate: function() {
-      if (gui.autoexpose && !stopped) {
-        // three stages:
-        // 1) start analysis
-        if (!analysing && !done) { 
-          expose();
-        }
-        // 2) continue analysis
-        else if (analysing && !done) {
-          start_analysis();
-        }
-        // 3) stop analysis and reset
-        else if (done) {
-          done = false;
-        }
+      if (gui && gui.autoexpose && !stopped && !moving) {
+        if (!analysing && !done) expose();
+        else if (analysing && !done) start_analysis();
+        else if (done) done = false;
       }
     }
   });
+
+  // ENGINE 2: WATER ONLY
+  var waterLayer = Tangram.leafletLayer({
+    scene: 'scene-water.yaml'
+  });
   
-  // from https://davidwalsh.name/javascript-debounce-function
   function debounce(func, wait, immediate) {
     var timeout;
     return function() {
@@ -109,157 +67,133 @@ map = (function () {
     };
   };
   
-  function linkFromBlob(blob) {
-    var urlCreator = window.URL || window.webkitURL;
-    return urlCreator.createObjectURL( blob );
-  }
-  
   function expose() {
     analysing = true;
     if (typeof gui != 'undefined' && gui.autoexpose == false) return false;
-    if (scene_loaded) {
-      start_analysis();
-    } else {
-      // wait for scene to initialize first
-      scene.initializing.then(function() {
-        start_analysis();
-      });
-    }
+    if (scene_loaded) start_analysis();
+    else terrainLayer.scene.initializing.then(start_analysis);
   }
   
   function updateGUI() {
-    // update dat.gui controllers
-    for (var i in gui.__controllers) {
-      gui.__controllers[i].updateDisplay();
+    for (var i in gui.__controllers) gui.__controllers[i].updateDisplay();
+    for (var folder in gui.__folders) {
+      for (var i in gui.__folders[folder].__controllers) {
+        gui.__folders[folder].__controllers[i].updateDisplay();
+      }
     }
   }
   
   function start_analysis() {
-    // set levels
     var levels = analyse();
     diff = levels.max - lastumax;
     if (typeof levels.max !== 'undefined') lastumax = levels.max;
     else diff = 1;
-    // was the last change a widening or narrowing?
     widening = diff < 0 ? false : true;
     if (levels) {
-      scene.styles.hillshade.shaders.uniforms.u_min = levels.min;
-      scene.styles.hillshade.shaders.uniforms.u_max = levels.max;
+      terrainLayer.scene.styles.hillshade.shaders.uniforms.u_min = levels.min;
+      terrainLayer.scene.styles.hillshade.shaders.uniforms.u_max = levels.max;
     }
-    scene.requestRedraw();
+    terrainLayer.scene.requestRedraw();
   }
   
   function analyse() {
-    var ctx = tempCanvas.getContext("2d"); // Get canvas 2d context
+    if (!tempCanvas || !terrainLayer.scene || !terrainLayer.scene.canvas) return false;
+    
+    let expectedW = Math.floor(terrainLayer.scene.canvas.width/tempFactor);
+    let expectedH = Math.floor(terrainLayer.scene.canvas.height/tempFactor);
+    if (tempCanvas.width !== expectedW) {
+        tempCanvas.width = expectedW;
+        tempCanvas.height = expectedH;
+    }
+
+    var ctx = tempCanvas.getContext("2d", { willReadFrequently: true }); 
     ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+    ctx.drawImage(terrainLayer.scene.canvas, 0, 0, tempCanvas.width, tempCanvas.height);
+    var pixels = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
     
-    // redraw canvas smaller in testing canvas, for speed
-    ctx.drawImage(scene.canvas,0,0,scene.canvas.width/tempFactor,scene.canvas.height/tempFactor);
-    // get all the pixels
-    var pixels = ctx.getImageData(0,0, tempCanvas.width, tempCanvas.height);
-    
-    var val;
-    var counts = {};
-    var empty = true;
-    var max = 0, min = 255;
-    // only check every nth pixel (vary with browser size)
-    // var stride = Math.round(img.height * img.width / 1000000);
-    // 4 = only sample the red value in [R, G, B, A]
+    var val, empty = true, max = 0, min = 255;
     for (var i = 0; i < tempCanvas.height * tempCanvas.width * 4; i += 4) {
-      val = pixels.data[i];
-      var alpha = pixels.data[i+3];
-      if (alpha === 0) { // empty pixel, skip to the next one
-        continue;
-      }
-      // if we got this far, we found at least one non-empty pixel!
+      if (pixels.data[i+3] === 0) continue;
+      val = pixels.data[i]; 
       empty = false;
-      // update counts, to get a histogram
-      counts[val] = counts[val] ? counts[val]+1 : 1;
-      
-      // update min and max so far
       min = Math.min(min, val);
       max = Math.max(max, val);
     }
     
-    if (empty) {
-      // no pixels found, skip the analysis
-      return false;
-    }
+    if (empty) return false;
+    
     if (max > 253 && min < 4 && !widening ) {
-      // looks good, done
       analysing = false;
       done = true;
       spread = 2;
       return false;
     }
     if (max > 252 && min < 4 && widening) {
-      // over-exposed, widen the range
-      spread *= 2;
-      // cap spread
-      spread = Math.min(spread, 512)
-      // console.log("WIDEN >", spread, "   diff:", diff)
+      spread = Math.min(spread * 2, 512);
       max += spread;
       min -= spread;
     }
     
-    // calculate adjusted elevation settings based on current pixel
-    // values and elevation settings
     var range = (gui.u_max - gui.u_min);
-    var minadj = (min / 255) * range + gui.u_min;
-    var maxadj = (max / 255) * range + gui.u_min;
-    
-    // keep levels in range
-    minadj = Math.max(minadj, -11000);
-    maxadj = Math.min(maxadj, 8900);
-    // only let the minimum value go below 0 if ocean data is included
-    minadj = gui.include_oceans ? minadj : Math.max(minadj, 0);
-    
-    // keep min and max separated
+    var minadj = Math.max((min / 255) * range + gui.u_min, 0); 
+    var maxadj = Math.min((max / 255) * range + gui.u_min, 8900);
     if (minadj === maxadj) maxadj += 10;
     
-    // get the width of the current view in meters
-    // compare to the current elevation range in meters
-    // the ratio is the "height" of the current scene compared to its width –
-    // multiply it by the width of your 3D mesh to get the height
-    var zrange = (gui.u_max - gui.u_min);
-    var xscale = zrange / scene.view.size.meters.x;
-    gui.scaleFactor = xscale +''; // convert to string to make the display read-only
+    var xscale = (gui.u_max - gui.u_min) / terrainLayer.scene.view.size.meters.x;
+    gui.scaleFactor = xscale +''; 
     
-    scene.styles.hillshade.shaders.uniforms.u_min = minadj;
-    scene.styles.hillshade.shaders.uniforms.u_max = maxadj;
+    terrainLayer.scene.styles.hillshade.shaders.uniforms.u_min = minadj;
+    terrainLayer.scene.styles.hillshade.shaders.uniforms.u_max = maxadj;
     
-    // update dat.gui controllers
     gui.u_min = minadj;
     gui.u_max = maxadj;
     updateGUI();
-    
     return {max: maxadj, min: minadj}
   }
   
-  window.layer = layer;
-  var scene = layer.scene;
-  window.scene = scene;
+  window.terrainLayer = terrainLayer;
+  window.waterLayer = waterLayer;
   
-  // setView expects format ([lat, long], zoom)
   map.setView(map_start_location.slice(0, 3), map_start_location[2]);
-  
   let hash = new L.Hash(map);
 
-  // Create dat GUI
   var gui;
   function addGUI () {
-    gui.domElement.parentNode.style.zIndex = 5; // make sure GUI is on top of map
+    gui.domElement.parentNode.style.zIndex = 5; 
     window.gui = gui;
+
+    // --- API KEY CONFIGURATION ---
+    let keyFolder = gui.addFolder('API Key Configuration');
+    gui.api_key = localStorage.getItem('stadia_api_key') || '';
+    
+    keyFolder.add(gui, 'api_key').name("Stadia Key").onChange(function(value) {
+        let val = value.trim();
+        localStorage.setItem('stadia_api_key', val);
+        
+        if (terrainLayer.scene && terrainLayer.scene.config.sources.elevation) {
+            terrainLayer.scene.config.sources.elevation.url_params = terrainLayer.scene.config.sources.elevation.url_params || {};
+            terrainLayer.scene.config.sources.elevation.url_params.api_key = val;
+            terrainLayer.scene.updateConfig();
+        }
+        if (waterLayer.scene && waterLayer.scene.config.sources.nhd_data) {
+            waterLayer.scene.config.sources.nhd_data.url_params = waterLayer.scene.config.sources.nhd_data.url_params || {};
+            waterLayer.scene.config.sources.nhd_data.url_params.api_key = val;
+            waterLayer.scene.updateConfig();
+        }
+    });
+    keyFolder.open();
+    // -----------------------------
+    
     gui.u_max = 8848.;
     gui.add(gui, 'u_max', -10916., 8848).name("max elevation").onChange(function(value) {
-      scene.styles.hillshade.shaders.uniforms.u_max = value;
-      scene.requestRedraw();
+      terrainLayer.scene.styles.hillshade.shaders.uniforms.u_max = value;
+      terrainLayer.scene.requestRedraw();
     });
-    // gui.u_min = -10916.;
+    
     gui.u_min = 0.;
     gui.add(gui, 'u_min', -10916., 8848).name("min elevation").onChange(function(value) {
-      scene.styles.hillshade.shaders.uniforms.u_min = value;
-      scene.requestRedraw();
+      terrainLayer.scene.styles.hillshade.shaders.uniforms.u_min = value;
+      terrainLayer.scene.requestRedraw();
     });
     
     gui.scaleFactor = 1 +'';
@@ -269,250 +203,101 @@ map = (function () {
     gui.add(gui, 'autoexpose').name("auto-exposure").onChange(function(value) {
       sliderState(!value);
       if (value) {
-        // store slider values
         uminValue = gui.u_min;
         umaxValue = gui.u_max;
-        // force widening value to trigger redraw
         lastumax = 0;
         expose();
       } else if (typeof uminValue != 'undefined') {
-        // retrieve slider values
-        scene.styles.hillshade.shaders.uniforms.u_min = uminValue;
-        scene.styles.hillshade.shaders.uniforms.u_max = umaxValue;
-        scene.requestRedraw();
+        terrainLayer.scene.styles.hillshade.shaders.uniforms.u_min = uminValue;
+        terrainLayer.scene.styles.hillshade.shaders.uniforms.u_max = umaxValue;
+        terrainLayer.scene.requestRedraw();
         gui.u_min = uminValue;
         gui.u_max = umaxValue;
         updateGUI();
       }
     });
-    
-    gui.include_oceans = false;
-    gui.add(gui, 'include_oceans').name("include ocean data").onChange(function(value) {
-      if (value) global_min = -11000;
-      else global_min = 0;
-      gui.u_min = global_min;
-      scene.styles.hillshade.shaders.uniforms.u_min = global_min;
-      expose();
+
+    let waterFolder = gui.addFolder('Water Mask Settings');
+    gui.show_water = true;
+    waterFolder.add(gui, 'show_water').name("Show Water").onChange(function(value) {
+        if (waterLayer.scene && waterLayer.scene.canvas) {
+            waterLayer.scene.canvas.style.display = value ? 'block' : 'none';
+        }
     });
     
-    gui.map_lines = false;
-    gui.add(gui, 'map_lines').name("map lines").onChange(function(value) {
-      toggleLines(value);
+    gui.water_thickness = 2;
+    waterFolder.add(gui, 'water_thickness', 0.5, 15, 0.5).name("River Width (px)").onChange(function(value) {
+        if (waterLayer.scene && waterLayer.scene.config.layers.nhd_lines) {
+            waterLayer.scene.config.layers.nhd_lines.draw.lines.width = value + 'px';
+            waterLayer.scene.updateConfig();
+        }
     });
-    
-    gui.map_labels = false;
-    gui.add(gui, 'map_labels').name("map labels").onChange(function(value) {
-      toggleLabels(value);
-    });
-    
-    // gui.API_KEY = query.api_key || 'mapzen-XXXXXX';
-    // gui.add(gui, 'API_KEY').name("API KEY").onChange(function(value) {
-    //   scene.config.sources["elevation-high"].url_params.api_key = value;
-    //   scene.config.layers["terrain-high"].enabled = true;
-    //   scene.updateConfig();
-    // });
-    
-    gui.export = function () {
-      return scene.screenshot().then(function(screenshot) {
-        // if (gui.API_KEY === 'mapzen-XXXXXX') {
-        //   alert('Please enter your API key!')
-        //   scene.config.layers["terrain-high"].enabled = false;
-        //   scene.updateConfig();
-        // } else if (gui.API_KEY === scene.config.sources.elevation.url_params.api_key) {
-        //   alert('Please enter your own API key!')
-        //   scene.config.layers["terrain-high"].enabled = false;
-        //   scene.updateConfig();
-        // } else {
-        // uses FileSaver.js: https://github.com/eligrey/FileSaver.js/
-        saveAs(screenshot.blob, 'heightmapper-' + (+new Date()) + '.png');
-        // }
-      });
+    waterFolder.open();
+
+    let boxFolder = gui.addFolder('Export Resolution');
+    gui.mapWidth = 800;
+    gui.mapHeight = 800;
+    gui.zoomRender = 1;
+    gui.mapRotation = 0;
+    gui.finalRes = "800 x 800 px";
+
+    function updateBox() {
+        let wrapper = document.getElementById('map-wrapper');
+        let mapEl = document.getElementById('map');
+        if (wrapper && mapEl) {
+            wrapper.style.width = gui.mapWidth + 'px';
+            wrapper.style.height = gui.mapHeight + 'px';
+
+            let D = Math.ceil(Math.sqrt(gui.mapWidth*gui.mapWidth + gui.mapHeight*gui.mapHeight));
+            mapEl.style.width = D + 'px';
+            mapEl.style.height = D + 'px';
+            mapEl.style.left = -(D - gui.mapWidth)/2 + 'px';
+            mapEl.style.top = -(D - gui.mapHeight)/2 + 'px';
+
+            let finalW = gui.mapWidth * gui.zoomRender;
+            let finalH = gui.mapHeight * gui.zoomRender;
+            gui.finalRes = finalW + " x " + finalH + " px";
+
+            map.invalidateSize();
+            updateGUI();
+        }
     }
-    gui.add(gui, 'export');
-    
-    gui.zoomRender = zoomRender;
-    gui.add(gui, 'zoomRender', min_zoomRender, max_zoomRender, 1).name("Render Multiplier").onChange(function(value) {
-      zoomRender = Math.round(value);
-      
+
+    boxFolder.add(gui, 'mapWidth', 256, 4096, 1).name('Base Width').onChange(updateBox);
+    boxFolder.add(gui, 'mapHeight', 256, 4096, 1).name('Base Height').onChange(updateBox);
+    boxFolder.add(gui, 'zoomRender', min_zoomRender, max_zoomRender, 1).name("Render Multiplier").onChange(function() {
+        let finalW = gui.mapWidth * gui.zoomRender;
+        let finalH = gui.mapHeight * gui.zoomRender;
+        gui.finalRes = finalW + " x " + finalH + " px";
+        updateGUI();
     });
     
-    gui.renderName = renderName.name;
-    let rendernameInput = gui.add(gui, 'renderName').name('Render Name').onChange(function(value) {
-      renderName.name = value;
+    boxFolder.add(gui, 'mapRotation', 0, 360, 1).name("Compass Rotation").onChange(function(value) {
+        document.getElementById('map').style.transform = `rotate(${value}deg)`;
     });
-    rendernameInput.domElement.id = 'renderName';
+
+    boxFolder.add(gui, 'finalRes').name("FINAL OUTPUT");
     
-    gui.render = function () {
-      renderView();
-    }
+    gui.resetBox = function() {
+        gui.mapWidth = 800;
+        gui.mapHeight = 800;
+        gui.mapRotation = 0;
+        document.getElementById('map').style.transform = `rotate(0deg)`;
+        updateBox();
+    };
+    boxFolder.add(gui, 'resetBox').name("Reset View");
+    boxFolder.open();
     
-    gui.add(gui, 'render');
-    
-    
-    
-    gui.help = function () {
-      // show help screen and input blocker
-      toggleHelp(true);
-    }
-    gui.add(gui, 'help');
-    // set scale factor text field to be uneditable but still selectable (for copying)
+    gui.export_maps = function () { exportDualMaps(); }
+    gui.add(gui, 'export_maps').name("EXPORT MAPS");
+
     gui.__controllers[2].domElement.firstChild.setAttribute("readonly", true);
-    
-  }
-  function stop() {
-    console.log('stopping')
-    stopped = true;
-    console.log('stopping:', stopped)
-    
-  }
-  function go() {
-    stopped = false;
-  }
-  
-  async function renderView() {
-    // account for retina screens etc
-    let zoomFactor = zoomRender * window.devicePixelRatio;
-    const originalX = scene.canvas.width;
-    const originalY = scene.canvas.height;
-    const outputX = originalX * zoomRender;
-    const outputY = originalY * zoomRender;
-    const size_mb = Math.ceil(scene.canvas.width * scene.canvas.height * zoomFactor * mb_factor);
-    const status = confirm(`Potential image size with ${zoomRender}x zoom render: ${size_mb} MB\nEstimated dimensions: ${outputX}X${outputY} pixels.\nAn Alert will display when the render is complete.\nThis will take some time, continue?`);
-    
-    if(!status) {
-      return;
-    }
-    
-    // Pre-redraw to make sure view is set:
-    map.invalidateSize(true);
-    
-    // TODO: lock interaction.
-    
-    logRenderStep("Preparing render");
-    
-    // Store original bounds to return post render.
-    const originalBounds = map.getBounds();
-    
-    // Turn off auto-exposure:
-    const preRenderAutoExposureState = gui.autoexpose;
-    gui.autoexpose = false;
-    const widthPerCell = scene.canvas.width / zoomFactor;
-    const heightPerCell = scene.canvas.height / zoomFactor;
-    const captures = [];
-    const captureOrigins = [];
-    // Cache all the bounding box points before moving the map for each render.
-    const cells = [];
-    for(let i = 0; i < zoomRender; i++) {
-      for(let j = 0; j < zoomRender; j++) {
-        // Get a bounding box of the Points using northwest and southeast:
-        const nwPoint = L.point(i * widthPerCell, j * heightPerCell, false);
-        const sePoint = L.point(nwPoint.x + widthPerCell, nwPoint.y + heightPerCell, false);
-        // Use the map container and not layer PointToLatLng for the most current position.
-        const topLeftCoords = map.containerPointToLatLng(nwPoint);
-        const bottomRightCoords = map.containerPointToLatLng(sePoint);
-        // Coordinate bounding box of where we want to be:
-        const bounds = L.latLngBounds(topLeftCoords, bottomRightCoords);
-        // Cache the origin point of the cell for later (rounding errrors);
-        captureOrigins.push(nwPoint);
-        cells.push(bounds);
-      }
-    }
-    
-    logRenderStep("Rendering cells");
-    
-    // Render each cell:
-    let count = 0;
-    for(const bounds of cells) {
-      // wait for Leaflet moveend + zoomend events
-      await async function() {
-        return new Promise(resolve => {
-          map.once('moveend zoomend', resolve);
-          map.fitBounds(bounds);
-        });
-      }();
-      await awaitViewComplete().then(async () => {
-        // Cache the screenshot
-        const renderedCell = await scene.screenshot();
-        captures[count] = renderedCell.url;
-        // saveAs(renderedCell.blob, `render-cell-${count}.png`);
-        console.log(`Cell ${count} rendered`);
-        count++
-      });
-    }
+    let finalResController = boxFolder.__controllers.find(c => c.property === 'finalRes');
+    if (finalResController) finalResController.domElement.firstChild.setAttribute("readonly", true);
 
-    map.fitBounds(originalBounds);
+    updateBox();
+  }
 
-    logRenderStep("Building final image");
-    
-    // Stitch the image together
-    const renderCanvas = document.createElement('canvas');
-    renderCanvas.id = "renderCanvas";
-    renderCanvas.width = outputX;
-    renderCanvas.height = outputY;
-    const renderContext = renderCanvas.getContext("2d");
-    
-    for(let i = 0; i < captures.length; i++) {
-      const xPixel = captureOrigins[i].x * zoomFactor;
-      const yPixel = captureOrigins[i].y * zoomFactor;
-      await addImageToCanvas(renderContext, captures[i], xPixel, yPixel);
-      console.log("added image to canvas");
-    }
-    
-    logRenderStep("Saving render");
-    const blob = await getCanvasBlob(renderCanvas);
-    saveAs(blob, `${renderName.name ?? 'render'}.png`);
-    
-    // Clean up:
-    logRenderStep("Cleaning up");
-    gui.autoexpose = preRenderAutoExposureState;
-    alert("Render complete!");
-  }
-  
-  function waitForSeconds(seconds) {
-    return new Promise((resolve, reject) => {
-      setTimeout(resolve, seconds*1000);
-    });
-  }
-  
-  
-  function awaitViewComplete() {
-    return new Promise((resolve, reject) => {
-      scene.subscribe({
-        view_complete: () => {resolve();}
-      })
-    });  
-  }
-  
-  // Note: x and y on canvas start top left.
-  function addImageToCanvas(ctx, src, x, y) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.src = src;
-      img.onload = function() {
-        ctx.drawImage(img, x, y);
-        resolve();
-      }
-    })
-  }
-  
-  function getCanvasBlob(canvasElement) {
-    return new Promise((resolve, reject) => {
-      canvasElement.toBlob(function(blob) {
-        resolve(blob);
-      });
-    });
-  }
-  
-  function logRenderStep(title) {
-    console.log("=========================");
-    console.log(title);
-    console.log("=========================");
-  }
-  
-  window.stop = stop;
-  window.go = go;
-  
-  // disable sliders when autoexpose is on
   function sliderState(active) {
     var pointerEvents = active ? "auto" : "none";
     var opacity = active ? 1. : .5;
@@ -522,95 +307,182 @@ map = (function () {
     gui.__controllers[1].domElement.parentElement.style.opacity = opacity;
   }
   
-  // show and hide help screen
-  function toggleHelp(active) {
-    var visibility = active ? "visible" : "hidden";
-    document.getElementById('help').style.visibility = visibility;
-    // help-blocker prevents map interaction while help is visible
-    document.getElementById('help-blocker').style.visibility = visibility;
-  }
-  
-  // show and hide new alert
-  function toggleNew(active) {
-    var visibility = active ? "visible" : "hidden";
-    document.getElementById('new').style.visibility = visibility;
-    // help-blocker prevents map interaction while help is visible
-    document.getElementById('help-blocker').style.visibility = visibility;
-  }
-  
-  // draw boundary and water lines
-  function toggleLines(active) {
-    // scene.config.layers.water.visible = active;
-    scene.styles.togglelines.shaders.uniforms.u_alpha = active ? 1. : 0.;
-    scene.requestRedraw();
-  }
-  // draw labels
-  function toggleLabels(active) {
-    // scene.config.layers.water.visible = active;
-    scene.styles.toggletext.shaders.uniforms.u_alpha = active ? 1. : 0.;
-    scene.requestRedraw();
-  }
-  
-  document.onkeydown = function (e) {
-    e = e || window.event;
-    // listen for 'h'
-    if (e.which == 72 && document.activeElement != document.querySelector('#renderName>input')) {
-      // toggle UI
-      var display = map._controlContainer.style.display;
-      map._controlContainer.style.display = (display === "none") ? "block" : "none";
-      document.getElementsByClassName('dg')[0].style.display = (display === "none") ? "block" : "none";
-      // listen for 'esc'
-    } else if (e.which == 27) {
-      toggleHelp(false);
-    }
-  };
-  
-  /***** Render loop *****/
   window.addEventListener('load', function () {
-    // Scene initialized
-    layer.on('init', function() {
-      gui = new dat.GUI({ autoPlace: true, hideable: true, width: 300 });
+    terrainLayer.on('init', function() {
+      gui = new dat.GUI({ autoPlace: true, hideable: true, width: 320 });
       addGUI();
-      // resetViewComplete();
-      scene.subscribe({
-        // will be triggered when tiles are finished loading
-        // and also manually by the moveend event
-        view_complete: function() {
-        }
-      });
-      scene_loaded = true;
       
+      // Auto-load saved key into terrain
+      let savedKey = localStorage.getItem('stadia_api_key');
+      if (savedKey && terrainLayer.scene.config.sources.elevation) {
+          terrainLayer.scene.config.sources.elevation.url_params = terrainLayer.scene.config.sources.elevation.url_params || {};
+          terrainLayer.scene.config.sources.elevation.url_params.api_key = savedKey;
+          terrainLayer.scene.updateConfig();
+      }
+
+      terrainLayer.scene.subscribe({ view_complete: function() {} });
+      scene_loaded = true;
       sliderState(false);
       tempCanvas = document.createElement("canvas");
-      // document.body.appendChild(tempCanvas);
-      // tempCanvas.style.position = "absolute";
-      // tempCanvas.style.zIndex = 10000;
       
-      tempCanvas.width = scene.canvas.width/tempFactor; 
-      tempCanvas.height = scene.canvas.height/tempFactor;
-      
+      waterLayer.addTo(map); 
     });
-    layer.addTo(map);
+
+    waterLayer.on('init', function() {
+      // Auto-load saved key into water
+      let savedKey = localStorage.getItem('stadia_api_key');
+      if (savedKey && waterLayer.scene.config.sources.nhd_data) {
+          waterLayer.scene.config.sources.nhd_data.url_params = waterLayer.scene.config.sources.nhd_data.url_params || {};
+          waterLayer.scene.config.sources.nhd_data.url_params.api_key = savedKey;
+          waterLayer.scene.updateConfig();
+      }
+    });
     
-    // bind help div onclicks
-    document.getElementById('help').onclick = function(){toggleHelp(false)};
-    document.getElementById('new').onclick = function(){toggleNew(false)};
-    document.getElementById('help-blocker').onclick = function(){toggleHelp(false);toggleNew(false);};
+    terrainLayer.addTo(map);
     
-    // debounce moveend event
     var moveend = debounce(function(e) {
-      moving = false;
-      // manually reset view_complete
-      scene.resetViewComplete();
-      scene.requestRedraw();
+      moving = false; 
+      done = false;   
+      terrainLayer.scene.resetViewComplete();
+      terrainLayer.scene.requestRedraw();
+      waterLayer.scene.requestRedraw();
     }, 250);
     
     map.on("movestart", function (e) { moving = true; });
     map.on("moveend", function (e) { moveend(e) });
-    
-    // toggleNew(true);
   });
+
+  // --- RENDERING PIPELINE ---
   
+  function awaitBothViews() {
+    let tWait = new Promise((resolve) => {
+      let r = false;
+      const h = () => { if (!r) { r = true; terrainLayer.scene.unsubscribe({ view_complete: h }); resolve(); } };
+      terrainLayer.scene.subscribe({ view_complete: h });
+      terrainLayer.scene.requestRedraw();
+      setTimeout(h, 4000); 
+    });  
+    let wWait = new Promise((resolve) => {
+      let r = false;
+      const h = () => { if (!r) { r = true; waterLayer.scene.unsubscribe({ view_complete: h }); resolve(); } };
+      waterLayer.scene.subscribe({ view_complete: h });
+      waterLayer.scene.requestRedraw();
+      setTimeout(h, 4000); 
+    });
+    return Promise.all([tWait, wWait]);
+  }
+
+  async function exportDualMaps() {
+      const finalW = gui.mapWidth * gui.zoomRender;
+      const finalH = gui.mapHeight * gui.zoomRender;
+      const size_mb = Math.ceil(finalW * finalH * mb_factor);
+      
+      const status = confirm(`Final Resolution: ${finalW} x ${finalH} px\nEstimated memory per image: ~${size_mb} MB\n\nContinuing will export perfectly synced Height and Water maps. Continue?`);
+      if(!status) return;
+
+      const preRenderAutoExposureState = gui.autoexpose;
+      gui.autoexpose = false; 
+
+      try {
+          console.log("Generating renders...");
+
+          waterLayer.scene.config.scene.background.color = [0.0, 0.0, 0.0, 1.0];
+          await waterLayer.scene.updateConfig();
+          waterLayer.scene.canvas.style.display = 'block'; 
+
+          let stitchedTerrain = document.createElement('canvas');
+          let stitchedWater = document.createElement('canvas');
+
+          if (gui.zoomRender === 1) {
+              const tShot = await terrainLayer.scene.screenshot();
+              const wShot = await waterLayer.scene.screenshot();
+              
+              await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(tShot.blob); img.onload = () => { stitchedTerrain.width = img.width; stitchedTerrain.height = img.height; stitchedTerrain.getContext('2d').drawImage(img, 0, 0); r(); } });
+              await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(wShot.blob); img.onload = () => { stitchedWater.width = img.width; stitchedWater.height = img.height; stitchedWater.getContext('2d').drawImage(img, 0, 0); r(); } });
+          } else {
+              let zoomFactor = gui.zoomRender * window.devicePixelRatio;
+              const outputX = terrainLayer.scene.canvas.width * gui.zoomRender;
+              const outputY = terrainLayer.scene.canvas.height * gui.zoomRender;
+              
+              map.invalidateSize(true);
+              const originalBounds = map.getBounds();
+              
+              const widthPerCell = terrainLayer.scene.canvas.width / zoomFactor;
+              const heightPerCell = terrainLayer.scene.canvas.height / zoomFactor;
+              const tCaptures = [], wCaptures = [], captureOrigins = [], cells = [];
+              
+              for(let i = 0; i < gui.zoomRender; i++) {
+                for(let j = 0; j < gui.zoomRender; j++) {
+                  const nwPoint = L.point(i * widthPerCell, j * heightPerCell, false);
+                  const sePoint = L.point(nwPoint.x + widthPerCell, nwPoint.y + heightPerCell, false);
+                  const bounds = L.latLngBounds(map.containerPointToLatLng(nwPoint), map.containerPointToLatLng(sePoint));
+                  captureOrigins.push(nwPoint);
+                  cells.push(bounds);
+                }
+              }
+              
+              for(const bounds of cells) {
+                await new Promise(resolve => { map.once('moveend zoomend', resolve); map.fitBounds(bounds); });
+                await awaitBothViews();
+                const tCell = await terrainLayer.scene.screenshot();
+                const wCell = await waterLayer.scene.screenshot();
+                tCaptures.push(tCell.url);
+                wCaptures.push(wCell.url);
+              }
+
+              map.fitBounds(originalBounds);
+              
+              stitchedTerrain.width = outputX; stitchedTerrain.height = outputY;
+              stitchedWater.width = outputX; stitchedWater.height = outputY;
+              const tCtx = stitchedTerrain.getContext("2d");
+              const wCtx = stitchedWater.getContext("2d");
+              
+              for(let i = 0; i < tCaptures.length; i++) {
+                await new Promise(r => { let img = new Image(); img.src = tCaptures[i]; img.onload = function() { tCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
+                await new Promise(r => { let img = new Image(); img.src = wCaptures[i]; img.onload = function() { wCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
+              }
+          }
+
+          const finalTerrainCanvas = document.createElement('canvas');
+          const currentD = parseFloat(document.getElementById('map').style.width); 
+          const pixelScale = stitchedTerrain.width / currentD; 
+
+          finalTerrainCanvas.width = gui.mapWidth * pixelScale;
+          finalTerrainCanvas.height = gui.mapHeight * pixelScale;
+          const ftCtx = finalTerrainCanvas.getContext('2d');
+          ftCtx.translate(finalTerrainCanvas.width / 2, finalTerrainCanvas.height / 2);
+          ftCtx.rotate(gui.mapRotation * Math.PI / 180);
+          ftCtx.drawImage(stitchedTerrain, -stitchedTerrain.width / 2, -stitchedTerrain.height / 2);
+
+          const tBlob = await new Promise(resolve => finalTerrainCanvas.toBlob(resolve));
+          saveAs(tBlob, '1_terrain_heightmap.png');
+
+          const finalWaterCanvas = document.createElement('canvas');
+          finalWaterCanvas.width = gui.mapWidth * pixelScale;
+          finalWaterCanvas.height = gui.mapHeight * pixelScale;
+          const fwCtx = finalWaterCanvas.getContext('2d');
+          
+          fwCtx.fillStyle = "#000000"; 
+          fwCtx.fillRect(0, 0, finalWaterCanvas.width, finalWaterCanvas.height);
+          
+          fwCtx.translate(finalWaterCanvas.width / 2, finalWaterCanvas.height / 2);
+          fwCtx.rotate(gui.mapRotation * Math.PI / 180);
+          fwCtx.drawImage(stitchedWater, -stitchedWater.width / 2, -stitchedWater.height / 2);
+
+          const wBlob = await new Promise(resolve => finalWaterCanvas.toBlob(resolve));
+          saveAs(wBlob, '2_water_mask.png');
+
+      } catch (error) {
+          console.error("Export failed:", error);
+          alert("Export failed. Check the developer console for errors.");
+      } finally {
+          waterLayer.scene.config.scene.background.color = [0.0, 0.0, 0.0, 0.0];
+          await waterLayer.scene.updateConfig();
+          waterLayer.scene.canvas.style.display = gui.show_water ? 'block' : 'none';
+
+          gui.autoexpose = preRenderAutoExposureState;
+      }
+  }
+
   return map;
-  
 }());

@@ -1,0 +1,38 @@
+scene:
+  background:
+    color: [0.0, 0.0, 0.0, 1.0] 
+
+sources:
+  elevation:
+    type: Raster
+    url: https://tiles.stadiamaps.com/data/terrarium/{z}/{x}/{y}.png
+    max_zoom: 14
+    tile_size: 256
+    url_params:
+      api_key: ""
+
+styles:
+  hillshade:
+    base: raster
+    shaders:
+      uniforms:
+        u_max: 8900. 
+        u_min: 0. 
+      blocks:
+        global: |
+          float unpack(vec4 h) {
+            return (h.r * 256. + h.g + h.b / 256.) * 255. - 32768.;
+          }
+        color: |
+          float height = unpack(color);
+          float new_value = (height - u_min)/(u_max - u_min);
+          color.rgb = vec3(new_value);
+          color.a = 1.0;
+
+layers:
+  terrain:
+    data: { source: elevation, layer: _default }
+    visible: true
+    draw:
+      hillshade:
+        order: 0

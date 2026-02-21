@@ -1,0 +1,28 @@
+scene:
+  background:
+    color: [0.0, 0.0, 0.0, 0.0]
+
+sources:
+  nhd_data:
+    type: MVT
+    url: https://tiles.stadiamaps.com/data/openmaptiles/{z}/{x}/{y}.pbf
+    url_params:
+      api_key: ""
+
+layers:
+  nhd_lines:
+    data: { source: nhd_data, layer: waterway } 
+    visible: true
+    draw:
+      lines:
+        order: 1
+        color: [1.0, 1.0, 1.0, 1.0] 
+        width: 2px
+
+  nhd_water_polygons:
+    data: { source: nhd_data, layer: water }
+    visible: true
+    draw:
+      polygons:
+        order: 1
+        color: [1.0, 1.0, 1.0, 1.0]
