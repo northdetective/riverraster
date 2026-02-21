@@ -26,7 +26,7 @@
             width: 800px;  
             height: 800px; 
             overflow: hidden;
-            border: 2px solid #ffffff; /* Solid White Bounding Box */
+            border: 2px solid #ffffff; 
             box-shadow: 0 0 0 9999px rgba(0,0,0,0.7), 0 0 25px #000; 
             z-index: 1;
         }
@@ -37,6 +37,29 @@
             z-index: 0;
             transform-origin: center center;
         }
+
+        /* --- API MODAL STYLES --- */
+        #api-modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.9); 
+            z-index: 9999; display: none; 
+            justify-content: center; align-items: center;
+        }
+        #api-modal {
+            background: #222; border: 2px solid #555; border-radius: 8px;
+            padding: 30px 40px; text-align: center; font-family: verdana, sans-serif;
+            color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+        }
+        #api-modal h2 { margin: 0 0 5px 0; color: #fff; }
+        #api-modal p { margin: 0 0 20px 0; color: #aaa; font-size: 14px; font-style: italic; }
+        #api-modal input { width: 250px; padding: 10px; border: 1px solid #444; border-radius: 4px; background: #111; color: #fff; margin-bottom: 20px; text-align: center; }
+        #api-modal button { padding: 10px 20px; background: #00ffff; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        #api-modal button:hover { background: #00cccc; }
+        
+        /* The new dismiss button styling */
+        #api-modal .secondary-btn { background: #444; color: #fff; margin-left: 10px; }
+        #api-modal .secondary-btn:hover { background: #666; }
+        /* ------------------------ */
 
         #help-wrapper, #new-wrapper { visibility: hidden; position: absolute; width: 100%; z-index: 3001; background-color: grey; top: 10%; height: 90%; }
         #help-blocker { visibility: hidden; position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 3000; background-color: #666; opacity: .5; content: ' '; }
@@ -49,6 +72,17 @@
   </head>
 
   <body>
+    <div id="api-modal-overlay">
+        <div id="api-modal">
+            <h2>Stadia API key:</h2>
+            <p>(Don't want to get one? Clone and run locally)</p>
+            <input type="text" id="api-key-input" placeholder="Paste key here...">
+            <br>
+            <button id="api-key-submit">Enter App</button>
+            <button id="api-key-dismiss" class="secondary-btn">Run Without Key</button>
+        </div>
+    </div>
+
     <div id="new-wrapper">
         <div id="new">
             <ul><li><span style="color: #ee0000">NEW!</span> Enter your API key...</li></ul>

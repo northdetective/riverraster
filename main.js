@@ -34,7 +34,6 @@ map = (function () {
     "zoomSnap" : .001
   });
   
-  // ENGINE 1: TERRAIN ONLY
   var terrainLayer = Tangram.leafletLayer({
     scene: 'scene-terrain.yaml',
     attribution: 'Stadia Maps | Tangram',
@@ -47,7 +46,6 @@ map = (function () {
     }
   });
 
-  // ENGINE 2: WATER ONLY
   var waterLayer = Tangram.leafletLayer({
     scene: 'scene-water.yaml'
   });
@@ -162,11 +160,10 @@ map = (function () {
     gui.domElement.parentNode.style.zIndex = 5; 
     window.gui = gui;
 
-    // --- API KEY CONFIGURATION ---
-    let keyFolder = gui.addFolder('API Key Configuration');
+    let keyFolder = gui.addFolder('API key configuration');
     gui.api_key = localStorage.getItem('stadia_api_key') || '';
     
-    keyFolder.add(gui, 'api_key').name("Stadia Key").onChange(function(value) {
+    keyFolder.add(gui, 'api_key').name("Stadia key").onChange(function(value) {
         let val = value.trim();
         localStorage.setItem('stadia_api_key', val);
         
@@ -181,8 +178,6 @@ map = (function () {
             waterLayer.scene.updateConfig();
         }
     });
-    keyFolder.open();
-    // -----------------------------
     
     gui.u_max = 8848.;
     gui.add(gui, 'u_max', -10916., 8848).name("max elevation").onChange(function(value) {
@@ -217,28 +212,31 @@ map = (function () {
       }
     });
 
-    let waterFolder = gui.addFolder('Water Mask Settings');
+    gui.mapRotation = 0;
+    gui.add(gui, 'mapRotation', 0, 360, 1).name("compass rotation").onChange(function(value) {
+        document.getElementById('map').style.transform = `rotate(${value}deg)`;
+    });
+
+    let waterFolder = gui.addFolder('water mask settings');
     gui.show_water = true;
-    waterFolder.add(gui, 'show_water').name("Show Water").onChange(function(value) {
+    waterFolder.add(gui, 'show_water').name("show water").onChange(function(value) {
         if (waterLayer.scene && waterLayer.scene.canvas) {
             waterLayer.scene.canvas.style.display = value ? 'block' : 'none';
         }
     });
     
     gui.water_thickness = 2;
-    waterFolder.add(gui, 'water_thickness', 0.5, 15, 0.5).name("River Width (px)").onChange(function(value) {
+    waterFolder.add(gui, 'water_thickness', 0.5, 15, 0.5).name("river width (px)").onChange(function(value) {
         if (waterLayer.scene && waterLayer.scene.config.layers.nhd_lines) {
             waterLayer.scene.config.layers.nhd_lines.draw.lines.width = value + 'px';
             waterLayer.scene.updateConfig();
         }
     });
-    waterFolder.open();
 
-    let boxFolder = gui.addFolder('Export Resolution');
+    let boxFolder = gui.addFolder('export resolution');
     gui.mapWidth = 800;
     gui.mapHeight = 800;
     gui.zoomRender = 1;
-    gui.mapRotation = 0;
     gui.finalRes = "800 x 800 px";
 
     function updateBox() {
@@ -263,20 +261,16 @@ map = (function () {
         }
     }
 
-    boxFolder.add(gui, 'mapWidth', 256, 4096, 1).name('Base Width').onChange(updateBox);
-    boxFolder.add(gui, 'mapHeight', 256, 4096, 1).name('Base Height').onChange(updateBox);
-    boxFolder.add(gui, 'zoomRender', min_zoomRender, max_zoomRender, 1).name("Render Multiplier").onChange(function() {
+    boxFolder.add(gui, 'mapWidth', 256, 4096, 1).name('base width').onChange(updateBox);
+    boxFolder.add(gui, 'mapHeight', 256, 4096, 1).name('base height').onChange(updateBox);
+    boxFolder.add(gui, 'zoomRender', min_zoomRender, max_zoomRender, 1).name("render multiplier").onChange(function() {
         let finalW = gui.mapWidth * gui.zoomRender;
         let finalH = gui.mapHeight * gui.zoomRender;
         gui.finalRes = finalW + " x " + finalH + " px";
         updateGUI();
     });
-    
-    boxFolder.add(gui, 'mapRotation', 0, 360, 1).name("Compass Rotation").onChange(function(value) {
-        document.getElementById('map').style.transform = `rotate(${value}deg)`;
-    });
 
-    boxFolder.add(gui, 'finalRes').name("FINAL OUTPUT");
+    boxFolder.add(gui, 'finalRes').name("final output");
     
     gui.resetBox = function() {
         gui.mapWidth = 800;
@@ -285,13 +279,13 @@ map = (function () {
         document.getElementById('map').style.transform = `rotate(0deg)`;
         updateBox();
     };
-    boxFolder.add(gui, 'resetBox').name("Reset View");
+    boxFolder.add(gui, 'resetBox').name("reset view");
     boxFolder.open();
     
     gui.export_maps = function () { exportDualMaps(); }
     gui.add(gui, 'export_maps').name("EXPORT MAPS");
 
-    gui.__controllers[2].domElement.firstChild.setAttribute("readonly", true);
+    gui.__controllers[3].domElement.firstChild.setAttribute("readonly", true); // Scale factor
     let finalResController = boxFolder.__controllers.find(c => c.property === 'finalRes');
     if (finalResController) finalResController.domElement.firstChild.setAttribute("readonly", true);
 
@@ -301,22 +295,24 @@ map = (function () {
   function sliderState(active) {
     var pointerEvents = active ? "auto" : "none";
     var opacity = active ? 1. : .5;
-    gui.__controllers[0].domElement.parentElement.style.pointerEvents = pointerEvents;
-    gui.__controllers[0].domElement.parentElement.style.opacity = opacity;
-    gui.__controllers[1].domElement.parentElement.style.pointerEvents = pointerEvents;
+    gui.__controllers[1].domElement.parentElement.style.pointerEvents = pointerEvents; // max elev
     gui.__controllers[1].domElement.parentElement.style.opacity = opacity;
+    gui.__controllers[2].domElement.parentElement.style.pointerEvents = pointerEvents; // min elev
+    gui.__controllers[2].domElement.parentElement.style.opacity = opacity;
   }
   
   window.addEventListener('load', function () {
+    let savedKey = localStorage.getItem('stadia_api_key');
+    let overlay = document.getElementById('api-modal-overlay');
+
     terrainLayer.on('init', function() {
       gui = new dat.GUI({ autoPlace: true, hideable: true, width: 320 });
       addGUI();
       
-      // Auto-load saved key into terrain
-      let savedKey = localStorage.getItem('stadia_api_key');
-      if (savedKey && terrainLayer.scene.config.sources.elevation) {
+      let currentKey = localStorage.getItem('stadia_api_key');
+      if (currentKey && terrainLayer.scene.config.sources.elevation) {
           terrainLayer.scene.config.sources.elevation.url_params = terrainLayer.scene.config.sources.elevation.url_params || {};
-          terrainLayer.scene.config.sources.elevation.url_params.api_key = savedKey;
+          terrainLayer.scene.config.sources.elevation.url_params.api_key = currentKey;
           terrainLayer.scene.updateConfig();
       }
 
@@ -329,23 +325,45 @@ map = (function () {
     });
 
     waterLayer.on('init', function() {
-      // Auto-load saved key into water
-      let savedKey = localStorage.getItem('stadia_api_key');
-      if (savedKey && waterLayer.scene.config.sources.nhd_data) {
+      let currentKey = localStorage.getItem('stadia_api_key');
+      if (currentKey && waterLayer.scene.config.sources.nhd_data) {
           waterLayer.scene.config.sources.nhd_data.url_params = waterLayer.scene.config.sources.nhd_data.url_params || {};
-          waterLayer.scene.config.sources.nhd_data.url_params.api_key = savedKey;
+          waterLayer.scene.config.sources.nhd_data.url_params.api_key = currentKey;
           waterLayer.scene.updateConfig();
       }
     });
     
-    terrainLayer.addTo(map);
+    function startApp(key) {
+        if (key) {
+            localStorage.setItem('stadia_api_key', key);
+        }
+        overlay.style.display = 'none';
+        terrainLayer.addTo(map); 
+    }
+
+    if (savedKey && savedKey.trim() !== '') {
+        startApp(savedKey);
+    } else {
+        overlay.style.display = 'flex';
+        
+        document.getElementById('api-key-submit').onclick = function() {
+            let key = document.getElementById('api-key-input').value.trim();
+            if (key) startApp(key);
+        };
+        
+        document.getElementById('api-key-dismiss').onclick = function() {
+            startApp(null); 
+        };
+    }
     
     var moveend = debounce(function(e) {
       moving = false; 
       done = false;   
-      terrainLayer.scene.resetViewComplete();
-      terrainLayer.scene.requestRedraw();
-      waterLayer.scene.requestRedraw();
+      if (terrainLayer.scene) {
+          terrainLayer.scene.resetViewComplete();
+          terrainLayer.scene.requestRedraw();
+      }
+      if (waterLayer.scene) waterLayer.scene.requestRedraw();
     }, 250);
     
     map.on("movestart", function (e) { moving = true; });
