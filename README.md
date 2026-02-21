@@ -2,7 +2,7 @@
 
 http://tangrams.github.io/heightmapper
 
-Tangrams made the original heightmapper. I just overlaid NHD data for water mask export and a rotatable bounding box with RCT2 mapping in mind
+Tangrams made the original heightmapper. I just overlaid waterbody and stream data for water mask export and a rotatable bounding box with RCT2 mapping in mind
 
 ### To run locally:
 
@@ -23,3 +23,5 @@ or
 Then navigate to: [http://localhost:8000](http://localhost:8000)
 
 Stadia API allows apps running on localhost to run without an API key, though at a rate limit.
+
+vibecoded with love by Google Gemini and northdetective
