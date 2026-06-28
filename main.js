@@ -218,10 +218,22 @@ map = (function () {
     });
 
     let waterFolder = gui.addFolder('water mask settings');
-    gui.show_water = true;
-    waterFolder.add(gui, 'show_water').name("show water").onChange(function(value) {
-        if (waterLayer.scene && waterLayer.scene.canvas) {
-            waterLayer.scene.canvas.style.display = value ? 'block' : 'none';
+    
+    gui.show_streams = true;
+    waterFolder.add(gui, 'show_streams').name("show streams").onChange(function(value) {
+        if (waterLayer.scene && waterLayer.scene.config.layers.nhd_lines) {
+            waterLayer.scene.config.layers.nhd_lines.visible = value;
+            waterLayer.scene.updateConfig();
+            waterLayer.scene.canvas.style.display = (gui.show_streams || gui.show_lakes) ? 'block' : 'none';
+        }
+    });
+
+    gui.show_lakes = true;
+    waterFolder.add(gui, 'show_lakes').name("show lakes").onChange(function(value) {
+        if (waterLayer.scene && waterLayer.scene.config.layers.nhd_water_polygons) {
+            waterLayer.scene.config.layers.nhd_water_polygons.visible = value;
+            waterLayer.scene.updateConfig();
+            waterLayer.scene.canvas.style.display = (gui.show_streams || gui.show_lakes) ? 'block' : 'none';
         }
     });
     
@@ -372,22 +384,24 @@ map = (function () {
 
   // --- RENDERING PIPELINE ---
   
-  function awaitBothViews() {
-    let tWait = new Promise((resolve) => {
+  function awaitTerrainView() {
+    return new Promise((resolve) => {
       let r = false;
       const h = () => { if (!r) { r = true; terrainLayer.scene.unsubscribe({ view_complete: h }); resolve(); } };
       terrainLayer.scene.subscribe({ view_complete: h });
       terrainLayer.scene.requestRedraw();
       setTimeout(h, 4000); 
-    });  
-    let wWait = new Promise((resolve) => {
+    });
+  }
+
+  function awaitWaterView() {
+    return new Promise((resolve) => {
       let r = false;
       const h = () => { if (!r) { r = true; waterLayer.scene.unsubscribe({ view_complete: h }); resolve(); } };
       waterLayer.scene.subscribe({ view_complete: h });
       waterLayer.scene.requestRedraw();
       setTimeout(h, 4000); 
     });
-    return Promise.all([tWait, wWait]);
   }
 
   async function exportDualMaps() {
@@ -409,14 +423,30 @@ map = (function () {
           waterLayer.scene.canvas.style.display = 'block'; 
 
           let stitchedTerrain = document.createElement('canvas');
-          let stitchedWater = document.createElement('canvas');
+          let stitchedStream = document.createElement('canvas');
+          let stitchedLake = document.createElement('canvas');
 
           if (gui.zoomRender === 1) {
               const tShot = await terrainLayer.scene.screenshot();
-              const wShot = await waterLayer.scene.screenshot();
-              
               await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(tShot.blob); img.onload = () => { stitchedTerrain.width = img.width; stitchedTerrain.height = img.height; stitchedTerrain.getContext('2d').drawImage(img, 0, 0); r(); } });
-              await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(wShot.blob); img.onload = () => { stitchedWater.width = img.width; stitchedWater.height = img.height; stitchedWater.getContext('2d').drawImage(img, 0, 0); r(); } });
+
+              if (gui.show_streams) {
+                  waterLayer.scene.config.layers.nhd_lines.visible = true;
+                  waterLayer.scene.config.layers.nhd_water_polygons.visible = false;
+                  await waterLayer.scene.updateConfig();
+                  await awaitWaterView();
+                  const sShot = await waterLayer.scene.screenshot();
+                  await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(sShot.blob); img.onload = () => { stitchedStream.width = img.width; stitchedStream.height = img.height; stitchedStream.getContext('2d').drawImage(img, 0, 0); r(); } });
+              }
+              
+              if (gui.show_lakes) {
+                  waterLayer.scene.config.layers.nhd_lines.visible = false;
+                  waterLayer.scene.config.layers.nhd_water_polygons.visible = true;
+                  await waterLayer.scene.updateConfig();
+                  await awaitWaterView();
+                  const lShot = await waterLayer.scene.screenshot();
+                  await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(lShot.blob); img.onload = () => { stitchedLake.width = img.width; stitchedLake.height = img.height; stitchedLake.getContext('2d').drawImage(img, 0, 0); r(); } });
+              }
           } else {
               let zoomFactor = gui.zoomRender * window.devicePixelRatio;
               const outputX = terrainLayer.scene.canvas.width * gui.zoomRender;
@@ -427,7 +457,7 @@ map = (function () {
               
               const widthPerCell = terrainLayer.scene.canvas.width / zoomFactor;
               const heightPerCell = terrainLayer.scene.canvas.height / zoomFactor;
-              const tCaptures = [], wCaptures = [], captureOrigins = [], cells = [];
+              const tCaptures = [], sCaptures = [], lCaptures = [], captureOrigins = [], cells = [];
               
               for(let i = 0; i < gui.zoomRender; i++) {
                 for(let j = 0; j < gui.zoomRender; j++) {
@@ -441,23 +471,52 @@ map = (function () {
               
               for(const bounds of cells) {
                 await new Promise(resolve => { map.once('moveend zoomend', resolve); map.fitBounds(bounds); });
-                await awaitBothViews();
+                
+                await awaitTerrainView();
                 const tCell = await terrainLayer.scene.screenshot();
-                const wCell = await waterLayer.scene.screenshot();
                 tCaptures.push(tCell.url);
-                wCaptures.push(wCell.url);
+
+                if (gui.show_streams) {
+                    waterLayer.scene.config.layers.nhd_lines.visible = true;
+                    waterLayer.scene.config.layers.nhd_water_polygons.visible = false;
+                    await waterLayer.scene.updateConfig();
+                    await awaitWaterView();
+                    const sCell = await waterLayer.scene.screenshot();
+                    sCaptures.push(sCell.url);
+                }
+
+                if (gui.show_lakes) {
+                    waterLayer.scene.config.layers.nhd_lines.visible = false;
+                    waterLayer.scene.config.layers.nhd_water_polygons.visible = true;
+                    await waterLayer.scene.updateConfig();
+                    await awaitWaterView();
+                    const lCell = await waterLayer.scene.screenshot();
+                    lCaptures.push(lCell.url);
+                }
               }
 
               map.fitBounds(originalBounds);
               
               stitchedTerrain.width = outputX; stitchedTerrain.height = outputY;
-              stitchedWater.width = outputX; stitchedWater.height = outputY;
               const tCtx = stitchedTerrain.getContext("2d");
-              const wCtx = stitchedWater.getContext("2d");
-              
               for(let i = 0; i < tCaptures.length; i++) {
                 await new Promise(r => { let img = new Image(); img.src = tCaptures[i]; img.onload = function() { tCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
-                await new Promise(r => { let img = new Image(); img.src = wCaptures[i]; img.onload = function() { wCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
+              }
+
+              if (gui.show_streams) {
+                  stitchedStream.width = outputX; stitchedStream.height = outputY;
+                  const sCtx = stitchedStream.getContext("2d");
+                  for(let i = 0; i < sCaptures.length; i++) {
+                    await new Promise(r => { let img = new Image(); img.src = sCaptures[i]; img.onload = function() { sCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
+                  }
+              }
+              
+              if (gui.show_lakes) {
+                  stitchedLake.width = outputX; stitchedLake.height = outputY;
+                  const lCtx = stitchedLake.getContext("2d");
+                  for(let i = 0; i < lCaptures.length; i++) {
+                    await new Promise(r => { let img = new Image(); img.src = lCaptures[i]; img.onload = function() { lCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
+                  }
               }
           }
 
@@ -475,28 +534,49 @@ map = (function () {
           const tBlob = await new Promise(resolve => finalTerrainCanvas.toBlob(resolve));
           saveAs(tBlob, '1_terrain_heightmap.png');
 
-          const finalWaterCanvas = document.createElement('canvas');
-          finalWaterCanvas.width = gui.mapWidth * pixelScale;
-          finalWaterCanvas.height = gui.mapHeight * pixelScale;
-          const fwCtx = finalWaterCanvas.getContext('2d');
-          
-          fwCtx.fillStyle = "#000000"; 
-          fwCtx.fillRect(0, 0, finalWaterCanvas.width, finalWaterCanvas.height);
-          
-          fwCtx.translate(finalWaterCanvas.width / 2, finalWaterCanvas.height / 2);
-          fwCtx.rotate(gui.mapRotation * Math.PI / 180);
-          fwCtx.drawImage(stitchedWater, -stitchedWater.width / 2, -stitchedWater.height / 2);
+          if (gui.show_streams) {
+              const finalStreamCanvas = document.createElement('canvas');
+              finalStreamCanvas.width = gui.mapWidth * pixelScale;
+              finalStreamCanvas.height = gui.mapHeight * pixelScale;
+              const fsCtx = finalStreamCanvas.getContext('2d');
+              
+              fsCtx.fillStyle = "#000000"; 
+              fsCtx.fillRect(0, 0, finalStreamCanvas.width, finalStreamCanvas.height);
+              
+              fsCtx.translate(finalStreamCanvas.width / 2, finalStreamCanvas.height / 2);
+              fsCtx.rotate(gui.mapRotation * Math.PI / 180);
+              fsCtx.drawImage(stitchedStream, -stitchedStream.width / 2, -stitchedStream.height / 2);
 
-          const wBlob = await new Promise(resolve => finalWaterCanvas.toBlob(resolve));
-          saveAs(wBlob, '2_water_mask.png');
+              const sBlob = await new Promise(resolve => finalStreamCanvas.toBlob(resolve));
+              saveAs(sBlob, '2_water_mask_stream.png');
+          }
+
+          if (gui.show_lakes) {
+              const finalLakeCanvas = document.createElement('canvas');
+              finalLakeCanvas.width = gui.mapWidth * pixelScale;
+              finalLakeCanvas.height = gui.mapHeight * pixelScale;
+              const flCtx = finalLakeCanvas.getContext('2d');
+              
+              flCtx.fillStyle = "#000000"; 
+              flCtx.fillRect(0, 0, finalLakeCanvas.width, finalLakeCanvas.height);
+              
+              flCtx.translate(finalLakeCanvas.width / 2, finalLakeCanvas.height / 2);
+              flCtx.rotate(gui.mapRotation * Math.PI / 180);
+              flCtx.drawImage(stitchedLake, -stitchedLake.width / 2, -stitchedLake.height / 2);
+
+              const lBlob = await new Promise(resolve => finalLakeCanvas.toBlob(resolve));
+              saveAs(lBlob, '3_water_mask_lake.png');
+          }
 
       } catch (error) {
           console.error("Export failed:", error);
           alert("Export failed. Check the developer console for errors.");
       } finally {
           waterLayer.scene.config.scene.background.color = [0.0, 0.0, 0.0, 0.0];
+          waterLayer.scene.config.layers.nhd_lines.visible = gui.show_streams;
+          waterLayer.scene.config.layers.nhd_water_polygons.visible = gui.show_lakes;
           await waterLayer.scene.updateConfig();
-          waterLayer.scene.canvas.style.display = gui.show_water ? 'block' : 'none';
+          waterLayer.scene.canvas.style.display = (gui.show_streams || gui.show_lakes) ? 'block' : 'none';
 
           gui.autoexpose = preRenderAutoExposureState;
       }
