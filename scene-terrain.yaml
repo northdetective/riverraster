@@ -8,6 +8,7 @@ sources:
     url: https://tiles.stadiamaps.com/data/terrarium/{z}/{x}/{y}.png
     max_zoom: 14
     tile_size: 256
+    filtering: nearest
     url_params:
       api_key: ""
 
