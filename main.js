@@ -297,6 +297,9 @@ map = (function () {
     boxFolder.add(gui, 'resetBox').name("reset view");
     boxFolder.open();
     
+    gui.filename = "heightmap";
+    gui.add(gui, 'filename').name("base filename");
+
     gui.export_maps = function () { exportDualMaps(); }
     gui.add(gui, 'export_maps').name("EXPORT MAPS");
 
@@ -562,7 +565,7 @@ map = (function () {
           ftCtx.drawImage(stitchedTerrain, -stitchedTerrain.width / 2, -stitchedTerrain.height / 2);
 
           const tBlob = await new Promise(resolve => finalTerrainCanvas.toBlob(resolve));
-          saveAs(tBlob, '1_terrain_heightmap.png');
+          saveAs(tBlob, gui.filename + '.png');
 
           if (gui.combine_water_masks && (gui.show_streams || gui.show_lakes)) {
               const finalCombinedCanvas = document.createElement('canvas');
@@ -578,7 +581,7 @@ map = (function () {
               fcCtx.drawImage(stitchedCombined, -stitchedCombined.width / 2, -stitchedCombined.height / 2);
 
               const cBlob = await new Promise(resolve => finalCombinedCanvas.toBlob(resolve));
-              saveAs(cBlob, '2_water_mask_combined.png');
+              saveAs(cBlob, gui.filename + '_combined.png');
           } else {
               if (gui.show_streams) {
                   const finalStreamCanvas = document.createElement('canvas');
@@ -594,7 +597,7 @@ map = (function () {
                   fsCtx.drawImage(stitchedStream, -stitchedStream.width / 2, -stitchedStream.height / 2);
 
                   const sBlob = await new Promise(resolve => finalStreamCanvas.toBlob(resolve));
-                  saveAs(sBlob, '2_water_mask_stream.png');
+                  saveAs(sBlob, gui.filename + '_stream.png');
               }
 
               if (gui.show_lakes) {
@@ -611,7 +614,7 @@ map = (function () {
                   flCtx.drawImage(stitchedLake, -stitchedLake.width / 2, -stitchedLake.height / 2);
 
                   const lBlob = await new Promise(resolve => finalLakeCanvas.toBlob(resolve));
-                  saveAs(lBlob, '3_water_mask_lake.png');
+                  saveAs(lBlob, gui.filename + '_lake.png');
               }
           }
 
