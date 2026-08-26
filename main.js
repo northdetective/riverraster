@@ -415,7 +415,7 @@ map = (function () {
       const finalH = gui.mapHeight * gui.zoomRender;
       const size_mb = Math.ceil(finalW * finalH * mb_factor);
       
-      const status = confirm(`Final Resolution: ${finalW} x ${finalH} px\nEstimated memory per image: ~${size_mb} MB\n\nContinuing will export perfectly synced Height and Water maps. Continue?`);
+      const status = confirm(`Final Resolution: ${finalW} x ${finalH} px\nEstimated memory per image: ~${size_mb} MB\n\nContinuing will export height and water maps. Continue?`);
       if(!status) return;
 
       const preRenderAutoExposureState = gui.autoexpose;
