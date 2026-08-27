@@ -1,0 +1,21 @@
+scene:
+  background:
+    color: [0.0, 0.0, 0.0, 0.0]
+
+sources:
+  road_data:
+    type: MVT
+    url: https://tiles.stadiamaps.com/data/openmaptiles/{z}/{x}/{y}.pbf
+    max_zoom: 14
+    url_params:
+      api_key: ""
+
+layers:
+  roads:
+    data: { source: road_data, layer: transportation } 
+    visible: true
+    draw:
+      lines:
+        order: 1
+        color: [1.0, 1.0, 1.0, 1.0] 
+        width: 2px

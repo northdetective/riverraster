@@ -49,6 +49,10 @@ map = (function () {
   var waterLayer = Tangram.leafletLayer({
     scene: 'scene-water.yaml'
   });
+
+  var roadsLayer = Tangram.leafletLayer({
+    scene: 'scene-roads.yaml'
+  });
   
   function debounce(func, wait, immediate) {
     var timeout;
@@ -151,6 +155,7 @@ map = (function () {
   
   window.terrainLayer = terrainLayer;
   window.waterLayer = waterLayer;
+  window.roadsLayer = roadsLayer;
   
   map.setView(map_start_location.slice(0, 3), map_start_location[2]);
   let hash = new L.Hash(map);
@@ -176,6 +181,11 @@ map = (function () {
             waterLayer.scene.config.sources.nhd_data.url_params = waterLayer.scene.config.sources.nhd_data.url_params || {};
             waterLayer.scene.config.sources.nhd_data.url_params.api_key = val;
             waterLayer.scene.updateConfig();
+        }
+        if (roadsLayer.scene && roadsLayer.scene.config.sources.road_data) {
+            roadsLayer.scene.config.sources.road_data.url_params = roadsLayer.scene.config.sources.road_data.url_params || {};
+            roadsLayer.scene.config.sources.road_data.url_params.api_key = val;
+            roadsLayer.scene.updateConfig();
         }
     });
     
@@ -245,6 +255,23 @@ map = (function () {
         if (waterLayer.scene && waterLayer.scene.config.layers.nhd_lines) {
             waterLayer.scene.config.layers.nhd_lines.draw.lines.width = value + 'px';
             waterLayer.scene.updateConfig();
+        }
+    });
+
+    let roadFolder = gui.addFolder('roadmap mask settings');
+    gui.show_roads = true;
+    roadFolder.add(gui, 'show_roads').name("show roads").onChange(function(value) {
+        if (roadsLayer.scene && roadsLayer.scene.config.layers.roads) {
+            roadsLayer.scene.config.layers.roads.visible = value;
+            roadsLayer.scene.updateConfig();
+            roadsLayer.scene.canvas.style.display = gui.show_roads ? 'block' : 'none';
+        }
+    });
+    gui.road_thickness = 2;
+    roadFolder.add(gui, 'road_thickness', 0.5, 15, 0.5).name("road width (px)").onChange(function(value) {
+        if (roadsLayer.scene && roadsLayer.scene.config.layers.roads) {
+            roadsLayer.scene.config.layers.roads.draw.lines.width = value + 'px';
+            roadsLayer.scene.updateConfig();
         }
     });
 
@@ -340,6 +367,7 @@ map = (function () {
       tempCanvas = document.createElement("canvas");
       
       waterLayer.addTo(map); 
+      roadsLayer.addTo(map);
     });
 
     waterLayer.on('init', function() {
@@ -348,6 +376,15 @@ map = (function () {
           waterLayer.scene.config.sources.nhd_data.url_params = waterLayer.scene.config.sources.nhd_data.url_params || {};
           waterLayer.scene.config.sources.nhd_data.url_params.api_key = currentKey;
           waterLayer.scene.updateConfig();
+      }
+    });
+
+    roadsLayer.on('init', function() {
+      let currentKey = localStorage.getItem('stadia_api_key');
+      if (currentKey && roadsLayer.scene.config.sources.road_data) {
+          roadsLayer.scene.config.sources.road_data.url_params = roadsLayer.scene.config.sources.road_data.url_params || {};
+          roadsLayer.scene.config.sources.road_data.url_params.api_key = currentKey;
+          roadsLayer.scene.updateConfig();
       }
     });
     
@@ -382,6 +419,7 @@ map = (function () {
           terrainLayer.scene.requestRedraw();
       }
       if (waterLayer.scene) waterLayer.scene.requestRedraw();
+      if (roadsLayer.scene) roadsLayer.scene.requestRedraw();
     }, 250);
     
     map.on("movestart", function (e) { moving = true; });
@@ -410,6 +448,16 @@ map = (function () {
     });
   }
 
+  function awaitRoadsView() {
+    return new Promise((resolve) => {
+      let r = false;
+      const h = () => { if (!r) { r = true; roadsLayer.scene.unsubscribe({ view_complete: h }); resolve(); } };
+      roadsLayer.scene.subscribe({ view_complete: h });
+      roadsLayer.scene.requestRedraw();
+      setTimeout(h, 4000); 
+    });
+  }
+
   async function exportDualMaps() {
       const finalW = gui.mapWidth * gui.zoomRender;
       const finalH = gui.mapHeight * gui.zoomRender;
@@ -428,10 +476,15 @@ map = (function () {
           await waterLayer.scene.updateConfig();
           waterLayer.scene.canvas.style.display = 'block'; 
 
+          roadsLayer.scene.config.scene.background.color = [0.0, 0.0, 0.0, 1.0];
+          await roadsLayer.scene.updateConfig();
+          roadsLayer.scene.canvas.style.display = 'block'; 
+
           let stitchedTerrain = document.createElement('canvas');
           let stitchedStream = document.createElement('canvas');
           let stitchedLake = document.createElement('canvas');
           let stitchedCombined = document.createElement('canvas');
+          let stitchedRoads = document.createElement('canvas');
 
           if (gui.zoomRender === 1) {
               const tShot = await terrainLayer.scene.screenshot();
@@ -463,6 +516,12 @@ map = (function () {
                       await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(lShot.blob); img.onload = () => { stitchedLake.width = img.width; stitchedLake.height = img.height; stitchedLake.getContext('2d').drawImage(img, 0, 0); r(); } });
                   }
               }
+
+              if (gui.show_roads) {
+                  await awaitRoadsView();
+                  const rShot = await roadsLayer.scene.screenshot();
+                  await new Promise(r => { let img = new Image(); img.src = URL.createObjectURL(rShot.blob); img.onload = () => { stitchedRoads.width = img.width; stitchedRoads.height = img.height; stitchedRoads.getContext('2d').drawImage(img, 0, 0); r(); } });
+              }
           } else {
               let zoomFactor = gui.zoomRender * window.devicePixelRatio;
               const outputX = terrainLayer.scene.canvas.width * gui.zoomRender;
@@ -473,7 +532,7 @@ map = (function () {
               
               const widthPerCell = terrainLayer.scene.canvas.width / zoomFactor;
               const heightPerCell = terrainLayer.scene.canvas.height / zoomFactor;
-              const tCaptures = [], sCaptures = [], lCaptures = [], cCaptures = [], captureOrigins = [], cells = [];
+              const tCaptures = [], sCaptures = [], lCaptures = [], cCaptures = [], rCaptures = [], captureOrigins = [], cells = [];
               
               for(let i = 0; i < gui.zoomRender; i++) {
                 for(let j = 0; j < gui.zoomRender; j++) {
@@ -518,6 +577,12 @@ map = (function () {
                         lCaptures.push(lCell.url);
                     }
                 }
+
+                if (gui.show_roads) {
+                    await awaitRoadsView();
+                    const rCell = await roadsLayer.scene.screenshot();
+                    rCaptures.push(rCell.url);
+                }
               }
 
               map.fitBounds(originalBounds);
@@ -549,6 +614,14 @@ map = (function () {
                       for(let i = 0; i < lCaptures.length; i++) {
                         await new Promise(r => { let img = new Image(); img.src = lCaptures[i]; img.onload = function() { lCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
                       }
+                  }
+              }
+
+              if (gui.show_roads) {
+                  stitchedRoads.width = outputX; stitchedRoads.height = outputY;
+                  const rCtx = stitchedRoads.getContext("2d");
+                  for(let i = 0; i < rCaptures.length; i++) {
+                    await new Promise(r => { let img = new Image(); img.src = rCaptures[i]; img.onload = function() { rCtx.drawImage(img, captureOrigins[i].x * zoomFactor, captureOrigins[i].y * zoomFactor); r(); } });
                   }
               }
           }
@@ -618,6 +691,23 @@ map = (function () {
               }
           }
 
+          if (gui.show_roads) {
+              const finalRoadsCanvas = document.createElement('canvas');
+              finalRoadsCanvas.width = gui.mapWidth * pixelScale;
+              finalRoadsCanvas.height = gui.mapHeight * pixelScale;
+              const frCtx = finalRoadsCanvas.getContext('2d');
+              
+              frCtx.fillStyle = "#000000"; 
+              frCtx.fillRect(0, 0, finalRoadsCanvas.width, finalRoadsCanvas.height);
+              
+              frCtx.translate(finalRoadsCanvas.width / 2, finalRoadsCanvas.height / 2);
+              frCtx.rotate(gui.mapRotation * Math.PI / 180);
+              frCtx.drawImage(stitchedRoads, -stitchedRoads.width / 2, -stitchedRoads.height / 2);
+
+              const rBlob = await new Promise(resolve => finalRoadsCanvas.toBlob(resolve));
+              saveAs(rBlob, gui.filename + '_roads.png');
+          }
+
       } catch (error) {
           console.error("Export failed:", error);
           alert("Export failed. Check the developer console for errors.");
@@ -627,6 +717,10 @@ map = (function () {
           waterLayer.scene.config.layers.nhd_water_polygons.visible = gui.show_lakes;
           await waterLayer.scene.updateConfig();
           waterLayer.scene.canvas.style.display = (gui.show_streams || gui.show_lakes) ? 'block' : 'none';
+
+          roadsLayer.scene.config.scene.background.color = [0.0, 0.0, 0.0, 0.0];
+          await roadsLayer.scene.updateConfig();
+          roadsLayer.scene.canvas.style.display = gui.show_roads ? 'block' : 'none';
 
           gui.autoexpose = preRenderAutoExposureState;
       }
